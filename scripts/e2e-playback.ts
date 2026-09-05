@@ -289,6 +289,10 @@ async function main(): Promise<void> {
     await new Promise((r) => setTimeout(r, 4000));
     const afterClose = requests.slice(beforeClose).filter((u) => u.includes("/hls/"));
     check("closing the player stops HLS fetches", afterClose.length === 0, afterClose.length ? `still fetched ${afterClose.slice(0, 3).join(", ")}` : "none in 4s");
+    // ... and tells the server it left, so a still-running job isn't kept
+    // for the full idle window (the player was on Remote at this point).
+    check("closing the player sends the leave beacon for its variant", requests.slice(beforeClose).some((u) => u.endsWith("/leave?variant=remote")));
+    check("switching quality sent a leave for the outgoing variant", requests.some((u) => u.endsWith("/leave?variant=original")));
     await ctxA.close();
 
     // ---- C. A direct-playable file plays from /stream with byte ranges, never HLS

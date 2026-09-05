@@ -44,12 +44,15 @@ export type MediaKind = "film" | "scene";
 export type { Variant } from "@/lib/video-playback";
 export { parseVariant, VARIANTS } from "@/lib/video-playback";
 
+// Playable states carry the probed duration: while a playlist is still
+// being written Apple's native player reports duration = Infinity, and the
+// player needs the real length to save progress and judge "completed".
 export type VideoStatus =
   | { state: "not-found" }
-  | { state: "direct" }
-  | { state: "ready" }
-  | { state: "preparing" }
-  | { state: "idle" }
+  | { state: "direct"; durationSecs: number | null }
+  | { state: "ready"; durationSecs: number | null }
+  | { state: "preparing"; durationSecs: number | null }
+  | { state: "idle"; durationSecs: number | null }
   | { state: "error"; message: string };
 
 interface ResolvedMedia {
@@ -323,9 +326,14 @@ const activeDirs = new Map<string, string>();
 // left still stops a two-hour transcode long before it finishes.
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const IDLE_CANCEL_MS = 10 * 60_000;
+// When a viewer says they've left (VideoPlayer's leave beacon on close,
+// navigation or a quality switch), the wait shrinks to this: long enough
+// for anyone else watching the same title to make a segment request and
+// re-arm the full window, short enough that a deliberate close doesn't
+// leave a transcode running for ten minutes for nobody.
+const LEAVE_CANCEL_MS = 30_000;
 
-function noteActivity(key: string): void {
-  if (!jobs.has(key)) return;
+function armIdleTimer(key: string, ms: number): void {
   const pending = idleTimers.get(key);
   if (pending) clearTimeout(pending);
   idleTimers.set(
@@ -336,8 +344,24 @@ function noteActivity(key: string): void {
       if (!proc) return;
       cancelledJobs.add(key);
       proc.kill("SIGTERM");
-    }, IDLE_CANCEL_MS),
+    }, ms),
   );
+}
+
+function noteActivity(key: string): void {
+  if (!jobs.has(key)) return;
+  armIdleTimer(key, IDLE_CANCEL_MS);
+}
+
+/** POST /leave hits this: a viewer closed the player for this key. If a
+ * job is running, its idle window drops to LEAVE_CANCEL_MS; any later
+ * activity (someone else's segment request) restores the full window.
+ * Returns whether there was a job to shorten. */
+export function noteViewerLeft(kind: MediaKind, id: number, variant: Variant): boolean {
+  const key = cacheKey(kind, id, variant);
+  if (!jobs.has(key)) return false;
+  armIdleTimer(key, LEAVE_CANCEL_MS);
+  return true;
 }
 
 function clearIdleTimer(key: string): void {
@@ -617,18 +641,19 @@ export async function getVideoStatus(kind: MediaKind, id: number, variant: Varia
 
   // "direct" is a property of the source, not a variant: a remote rendition
   // of a direct-playable file is still a prepare.
+  const durationSecs = media.durationSecs;
   if (plan.tier === "direct" && variant === "original") {
     const sourceAbsPath = resolveSourcePath(kind, media.filePath);
     if (!sourceAbsPath || !(await fileExists(sourceAbsPath))) return { state: "not-found" };
-    return { state: "direct" };
+    return { state: "direct", durationSecs };
   }
 
-  if (await isComplete(entryDir(key))) return { state: "ready" };
-  if (jobs.has(key)) return { state: "preparing" };
+  if (await isComplete(entryDir(key))) return { state: "ready", durationSecs };
+  if (jobs.has(key)) return { state: "preparing", durationSecs };
   await discardOrphanedEntry(key);
   const error = jobErrors.get(key);
   if (error) return { state: "error", message: error };
-  return { state: "idle" };
+  return { state: "idle", durationSecs };
 }
 
 /** POST /prepare hits this: starts the job (if needed) and returns the
@@ -642,11 +667,11 @@ export async function triggerVideoPrepare(kind: MediaKind, id: number, variant: 
   const key = cacheKey(kind, id, variant);
 
   if (plan.tier === "direct" && variant === "original") return getVideoStatus(kind, id, variant);
-  if (await isComplete(entryDir(key))) return { state: "ready" };
+  if (await isComplete(entryDir(key))) return { state: "ready", durationSecs: media.durationSecs };
 
   await discardOrphanedEntry(key);
   requestVideoPrepare(kind, id, variant, media, plan);
-  return { state: "preparing" };
+  return { state: "preparing", durationSecs: media.durationSecs };
 }
 
 export type VideoStreamResolution =
