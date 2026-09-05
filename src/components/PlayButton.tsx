@@ -4,9 +4,17 @@
 // open the in-app player without converting the whole card to "use client".
 
 import { useState } from "react";
-import VideoPlayer from "@/components/VideoPlayer";
+import VideoPlayer, { type PlaybackSource } from "@/components/VideoPlayer";
 
-export default function PlayButton({ versionId, title }: { versionId: number; title: string }) {
+export default function PlayButton({
+  versionId,
+  title,
+  source = "local",
+}: {
+  versionId: number;
+  title: string;
+  source?: PlaybackSource;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -20,7 +28,7 @@ export default function PlayButton({ versionId, title }: { versionId: number; ti
         </svg>
         Play
       </button>
-      {open && <VideoPlayer versionId={versionId} title={title} onClose={() => setOpen(false)} />}
+      {open && <VideoPlayer versionId={versionId} title={title} source={source} onClose={() => setOpen(false)} />}
     </>
   );
 }
