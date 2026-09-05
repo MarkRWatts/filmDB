@@ -96,7 +96,8 @@ export function playbackFromInfo(info: PlaybackInfoResponse): JellyfinPlayback {
   }
   const marker = "/master.m3u8";
   const at = source.TranscodingUrl.indexOf(marker);
-  if (at < 0) throw new Error(`unexpected Jellyfin transcoding URL: ${source.TranscodingUrl}`);
+  // The URL carries the API key; never let it into an error message.
+  if (at < 0) throw new Error(`unexpected Jellyfin transcoding URL: ${stripApiKey(source.TranscodingUrl)}`);
   const playlistPath = stripApiKey(source.TranscodingUrl.slice(at + 1)).replace("master.m3u8?&", "master.m3u8?");
   const reasons = source.TranscodeReasons;
   return {
