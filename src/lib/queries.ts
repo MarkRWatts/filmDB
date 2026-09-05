@@ -231,11 +231,27 @@ export async function getContinueWatchingFilms(userId: string): Promise<LibraryF
 }
 
 // ---------------------------------------------------------------------------
+// Favourites ("/" — signed-in user's hearted films, newest first)
+// ---------------------------------------------------------------------------
+
+export async function getFavouriteFilms(userId: string): Promise<LibraryFilm[]> {
+  const rows = await prisma.filmFavourite.findMany({
+    where: { userId, film: { owned: true } },
+    orderBy: { createdAt: "desc" },
+    select: { film: { select: FILM_CARD_SELECT } },
+  });
+  return rows.map((r) => shapeLibraryFilm(r.film));
+}
+
+// ---------------------------------------------------------------------------
 // Film detail ("/film/[id]")
 // ---------------------------------------------------------------------------
 
 export interface AudioTrackView {
   id: number;
+  /** ffprobe's absolute stream index -- what Jellyfin's AudioStreamIndex
+   *  and the local pipeline's -map both refer to. */
+  streamIdx: number;
   codec: string | null;
   profile: string | null;
   language: string | null;
@@ -329,6 +345,7 @@ export async function getFilmDetail(id: number): Promise<FilmDetail | null> {
     jellyfinId: v.jellyfinId,
     audioTracks: v.audioTracks.map((a) => ({
       id: a.id,
+      streamIdx: a.streamIdx,
       codec: a.codec,
       profile: a.profile,
       language: a.language,

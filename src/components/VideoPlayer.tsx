@@ -188,12 +188,17 @@ export default function VideoPlayer({
   basePath = "/api/video",
   trackProgress = true,
   source = "local",
+  audioTracks = [],
 }: {
   versionId: number;
   title: string;
   onClose: () => void;
   /** See PlaybackSource. Films with a Jellyfin item use "jellyfin". */
   source?: PlaybackSource;
+  /** The version's audio tracks, for the Audio dropdown (Jellyfin mode
+   *  only -- the local pipeline picks its own). Omit or pass one track
+   *  and no dropdown is shown. */
+  audioTracks?: { streamIdx: number; label: string }[];
   /** Which streaming API to hit — defaults to films' /api/video. Scenes use
    *  /api/adult-video (see video-cache.ts's kind-namespacing). */
   basePath?: string;
@@ -216,6 +221,8 @@ export default function VideoPlayer({
   // and the id to stop it with). Null until /jf/session has answered, and
   // replaced on a quality switch.
   const [jfSession, setJfSession] = useState<{ playlistUrl: string; playSessionId: string } | null>(null);
+  // Chosen audio stream index for Jellyfin mode; null = Jellyfin's default.
+  const [audioIdx, setAudioIdx] = useState<number | null>(null);
 
   const streamUrl = `${basePath}/${versionId}/stream`;
   const playlistUrl = (v: Variant) => `${basePath}/${versionId}/hls/${v}/index.m3u8`;
@@ -527,31 +534,47 @@ export default function VideoPlayer({
     rememberQuality(next);
     setVariant(next);
     if (source === "jellyfin") {
-      // A new Jellyfin session at the new bitrate; the old transcode is
-      // stopped explicitly. The pending seek carries the position across.
-      const old = jfSession?.playSessionId ?? null;
-      if (old) sendJellyfinStop(basePath, versionId, old);
-      setJfSession(null);
-      fetch(`${basePath}/${versionId}/jf/session?variant=${next}`, { method: "POST", cache: "no-store" })
-        .then(async (res) => {
-          const body = await res.json().catch(() => null);
-          if (!res.ok || typeof body?.playlistUrl !== "string") {
-            setUiState("error");
-            setMessage(typeof body?.error === "string" ? body.error : "Could not switch quality.");
-            return;
-          }
-          setJfSession({ playlistUrl: body.playlistUrl, playSessionId: body.playSessionId });
-        })
-        .catch(() => {
-          setUiState("error");
-          setMessage("Could not reach the server.");
-        });
+      restartJfSession(next, audioIdx);
       return;
     }
     durationIsFinalRef.current = false;
     // The outgoing variant's job would otherwise run on for the full idle
     // window with nobody watching it.
     if (tier === "prepare" || variant === "remote") sendLeave(basePath, versionId, variant);
+  }
+
+  // Jellyfin mode: a new session at this quality/audio track; the old
+  // transcode is stopped explicitly and the pending seek carries the
+  // position across, exactly like a quality switch on the local pipeline.
+  function restartJfSession(nextVariant: Variant, nextAudio: number | null) {
+    const old = jfSession?.playSessionId ?? null;
+    if (old) sendJellyfinStop(basePath, versionId, old);
+    setJfSession(null);
+    const audioParam = nextAudio === null ? "" : `&audio=${nextAudio}`;
+    fetch(`${basePath}/${versionId}/jf/session?variant=${nextVariant}${audioParam}`, { method: "POST", cache: "no-store" })
+      .then(async (res) => {
+        const body = await res.json().catch(() => null);
+        if (!res.ok || typeof body?.playlistUrl !== "string") {
+          setUiState("error");
+          setMessage(typeof body?.error === "string" ? body.error : "Could not restart playback.");
+          return;
+        }
+        setJfSession({ playlistUrl: body.playlistUrl, playSessionId: body.playSessionId });
+      })
+      .catch(() => {
+        setUiState("error");
+        setMessage("Could not reach the server.");
+      });
+  }
+
+  function changeAudio(next: number | null) {
+    if (next === audioIdx) return;
+    const v = videoRef.current;
+    seekOnLoadRef.current = v && v.currentTime > 0 ? v.currentTime : null;
+    stallTimesRef.current = [];
+    stopHoldPoll();
+    setAudioIdx(next);
+    restartJfSession(variant, next);
   }
 
   function stopHoldPoll() {
@@ -650,6 +673,25 @@ export default function VideoPlayer({
         <div className="flex items-center justify-between gap-3">
           <p className="min-w-0 truncate text-sm font-medium text-white">{title}</p>
           <div className="flex shrink-0 items-center gap-2">
+            {source === "jellyfin" && audioTracks.length > 1 && (
+              <label className="flex items-center gap-1.5 text-xs text-white/70">
+                Audio
+                <select
+                  value={audioIdx === null ? "" : String(audioIdx)}
+                  onChange={(e) => changeAudio(e.target.value === "" ? null : Number(e.target.value))}
+                  disabled={uiState !== "playing"}
+                  aria-label="Audio track"
+                  className="max-w-[16rem] rounded-md border border-white/20 bg-black/60 px-2 py-1 text-xs text-white focus-visible:outline-none disabled:opacity-40"
+                >
+                  <option value="">Default</option>
+                  {audioTracks.map((t) => (
+                    <option key={t.streamIdx} value={String(t.streamIdx)}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="flex items-center gap-1.5 text-xs text-white/70">
               Quality
               <select

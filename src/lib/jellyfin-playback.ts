@@ -129,6 +129,9 @@ export async function startJellyfinPlayback(opts: {
   jellyfinUserId: string | null;
   deviceId: string;
   variant: Variant;
+  /** ffprobe/Jellyfin stream index of the audio track to serve; null lets
+   *  Jellyfin pick (the source's default). */
+  audioStreamIndex?: number | null;
 }): Promise<JellyfinPlayback> {
   const url = new URL(`${jellyfinBaseUrl()}/Items/${opts.itemId}/PlaybackInfo`);
   if (opts.jellyfinUserId) url.searchParams.set("UserId", opts.jellyfinUserId);
@@ -145,6 +148,7 @@ export async function startJellyfinPlayback(opts: {
       AllowAudioStreamCopy: true,
       AutoOpenLiveStream: true,
       SubtitleStreamIndex: -1,
+      ...(opts.audioStreamIndex !== null && opts.audioStreamIndex !== undefined ? { AudioStreamIndex: opts.audioStreamIndex } : {}),
     }),
   });
   if (!res.ok) throw new Error(`Jellyfin PlaybackInfo -> HTTP ${res.status}`);

@@ -1,4 +1,4 @@
-// POST /api/video/:versionId/jf/session?variant=original|remote — start a
+// POST /api/video/:versionId/jf/session?variant=original|remote[&audio=<streamIdx>] — start a
 // Jellyfin playback session for this viewer and hand back the proxied
 // playlist URL (see src/lib/jellyfin-playback.ts). The player calls this
 // instead of /status when a Version has a Jellyfin item.
@@ -18,11 +18,23 @@ export async function POST(req: Request, ctx: { params: Promise<{ versionId: str
   const versionId = Number(versionIdParam);
   const itemId = await jellyfinItemForVersion(versionId);
   if (!itemId) return NextResponse.json({ error: "not found" }, { status: 404 });
-  const variant = parseVariant(new URL(req.url).searchParams.get("variant") ?? "original");
+  const params = new URL(req.url).searchParams;
+  const variant = parseVariant(params.get("variant") ?? "original");
   if (!variant) return NextResponse.json({ error: "invalid variant" }, { status: 400 });
+  const audioParam = params.get("audio");
+  const audioStreamIndex = audioParam === null || audioParam === "" ? null : Number(audioParam);
+  if (audioStreamIndex !== null && (!Number.isInteger(audioStreamIndex) || audioStreamIndex < 0 || audioStreamIndex > 999)) {
+    return NextResponse.json({ error: "invalid audio stream index" }, { status: 400 });
+  }
 
   try {
-    const playback = await startJellyfinPlayback({ itemId, jellyfinUserId: viewer.jellyfinUserId, deviceId: viewer.deviceId, variant });
+    const playback = await startJellyfinPlayback({
+      itemId,
+      jellyfinUserId: viewer.jellyfinUserId,
+      deviceId: viewer.deviceId,
+      variant,
+      audioStreamIndex,
+    });
     return NextResponse.json({
       playlistUrl: `/api/video/${versionId}/jf/${playback.playlistPath}`,
       playSessionId: playback.playSessionId,

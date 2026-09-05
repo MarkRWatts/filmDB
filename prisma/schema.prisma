@@ -63,6 +63,7 @@ model Film {
 
   @@index([collectionId])
   @@index([sortTitle])
+  favourites   FilmFavourite[]
 }
 
 // A physical disc you own of this film — independent of digital ownership
@@ -663,6 +664,18 @@ model AuditLog {
 // isn't built anywhere in this app. episodeFileId stays here, unwired,
 // purely as schema future-proofing for when TV playback exists; nothing in
 // this phase reads or writes it.
+// A person's favourite films (the heart on the film page). Per user, not
+// per household, like WatchProgress.
+model FilmFavourite {
+  userId    String // BetterAuth User.id
+  filmId    Int
+  film      Film     @relation(fields: [filmId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, filmId])
+  @@index([userId])
+}
+
 model WatchProgress {
   id            Int          @id @default(autoincrement())
   userId        String // BetterAuth User.id

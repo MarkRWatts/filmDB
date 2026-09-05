@@ -19,15 +19,16 @@ const AUDIO_FAMILY_STYLES: Record<"dolby" | "dts" | "neutral", string> = {
 export default function VersionCard({
   version,
   filmTitle,
-  jellyfinHref,
   playSource = null,
+  audioTracks,
 }: {
   version: VersionView;
   filmTitle: string;
-  jellyfinHref?: string | null;
-  /** Which pipeline the in-app Play button uses, or null for no button
-   *  (see the film page for the decision). */
+  /** Which pipeline the in-app Play button uses, or null for no button.
+   *  The film page's main Play button covers the usual single-version
+   *  case; this per-version one is for films with several files. */
   playSource?: PlaybackSource | null;
+  audioTracks?: { streamIdx: number; label: string }[];
 }) {
   const specs: { label: string; value: string }[] = [
     { label: "Resolution", value: version.resolution },
@@ -47,19 +48,8 @@ export default function VersionCard({
           <span className="text-sm italic text-text-muted">{version.edition}</span>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {playSource && <PlayButton versionId={version.id} title={filmTitle} source={playSource} />}
-          {jellyfinHref && (
-            <a
-              href={jellyfinHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-[11px] font-medium tracking-wide text-text-muted transition-colors hover:border-accent-border hover:text-accent-bright"
-            >
-              <svg aria-hidden viewBox="0 0 12 12" className="h-2.5 w-2.5 fill-current">
-                <path d="M2.5 1.2c0-.55.6-.9 1.08-.62l6.2 3.8c.46.28.46.94 0 1.22l-6.2 3.8c-.48.28-1.08-.07-1.08-.62V1.2z" />
-              </svg>
-              Play in Jellyfin
-            </a>
+          {playSource && (
+            <PlayButton versionId={version.id} title={filmTitle} source={playSource} audioTracks={audioTracks} />
           )}
         </div>
       </div>

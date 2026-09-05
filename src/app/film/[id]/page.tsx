@@ -3,10 +3,15 @@ import Image from "next/image";
 import { notFound } from "next/navigation";
 import PosterImage from "@/components/PosterImage";
 import VersionCard from "@/components/VersionCard";
+import FilmActions from "@/components/FilmActions";
+import { headers } from "next/headers";
+import { auth } from "@/lib/auth";
+import { getFilmUserState } from "@/lib/film-user-state";
+import { audioTrackLabel } from "@/lib/audio-track-label";
 import CollectionStrip from "@/components/CollectionStrip";
 import FilmPhysicalCopyForm from "@/components/FilmPhysicalCopyForm";
 import { getFilmDetail } from "@/lib/queries";
-import { getJellyfinServerInfo, jellyfinConfigured, jellyfinPlayUrl } from "@/lib/jellyfin";
+import { jellyfinConfigured } from "@/lib/jellyfin";
 
 export default async function FilmPage({
   params,
@@ -20,15 +25,32 @@ export default async function FilmPage({
   const film = await getFilmDetail(filmId);
   if (!film) notFound();
 
-  // Only build deep links when the server is actually reachable — no error
-  // state in the UI, versions without a match simply get no button.
-  const jellyfinServer = await getJellyfinServerInfo();
   // In-app Play: through Jellyfin's transcoder for any Version the sync has
   // matched to a Jellyfin item (PLAYBACK_PLAN.md, "Status"); the app's own
   // ffmpeg pipeline is parked, shown only when IN_APP_PLAYBACK=1 (which
   // scripts/e2e-playback.ts sets for its own server so it stays tested).
   const localPlay = process.env.IN_APP_PLAYBACK === "1";
   const jellyfinPlay = jellyfinConfigured();
+  const playSourceFor = (v: { jellyfinId: string | null }) =>
+    localPlay ? ("local" as const) : jellyfinPlay && v.jellyfinId ? ("jellyfin" as const) : null;
+  const audioOptionsFor = (v: (typeof film.versions)[number]) =>
+    v.audioTracks.map((a) => ({ streamIdx: a.streamIdx, label: audioTrackLabel(a) }));
+  // The main Play button plays the first playable version (versions are
+  // listed best-first); films with several files also get a per-version
+  // button on each card.
+  const primary = film.versions.find((v) => playSourceFor(v) !== null) ?? null;
+  const primaryPlay = primary
+    ? { versionId: primary.id, source: playSourceFor(primary)!, audioTracks: audioOptionsFor(primary) }
+    : null;
+
+  const session = await auth.api.getSession({ headers: await headers() });
+  const userState = session?.user?.id
+    ? await getFilmUserState(
+        session.user.id,
+        film.id,
+        film.versions.map((v) => v.id),
+      )
+    : { favourite: false, watched: false };
 
   return (
     <div className="flex flex-1 flex-col">
@@ -109,6 +131,14 @@ export default async function FilmPage({
                 </div>
               )}
 
+              <FilmActions
+                filmId={film.id}
+                title={film.title}
+                play={primaryPlay}
+                favourite={userState.favourite}
+                watched={userState.watched}
+              />
+
               {film.overview && (
                 <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
                   {film.overview}
@@ -136,10 +166,8 @@ export default async function FilmPage({
                   key={v.id}
                   version={v}
                   filmTitle={film.title}
-                  playSource={localPlay ? "local" : jellyfinPlay && v.jellyfinId ? "jellyfin" : null}
-                  jellyfinHref={
-                    v.jellyfinId && jellyfinServer ? jellyfinPlayUrl(v.jellyfinId, jellyfinServer.serverId) : null
-                  }
+                  playSource={film.versions.length > 1 ? playSourceFor(v) : null}
+                  audioTracks={audioOptionsFor(v)}
                 />
               ))}
             </div>
