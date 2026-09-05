@@ -38,6 +38,16 @@ describe("playbackFromInfo", () => {
     expect(pb.transcodeReasons).toEqual(["ContainerNotSupported", "AudioCodecNotSupported"]);
   });
 
+  it("never quotes the API key in an error", () => {
+    const odd = { PlaySessionId: "x", MediaSources: [{ Id: "m", TranscodingUrl: "/videos/9/stream.mp4?ApiKey=SECRET&x=1" }] };
+    expect(() => playbackFromInfo(odd)).toThrow(/unexpected/);
+    try {
+      playbackFromInfo(odd);
+    } catch (e) {
+      expect(String(e)).not.toContain("SECRET");
+    }
+  });
+
   it("refuses an item with no HLS offer or an error code", () => {
     expect(() => playbackFromInfo({ PlaySessionId: "x", MediaSources: [{ Id: "m" }] })).toThrow(/no HLS stream/);
     expect(() => playbackFromInfo({ ErrorCode: "NotAllowed" })).toThrow(/NotAllowed/);

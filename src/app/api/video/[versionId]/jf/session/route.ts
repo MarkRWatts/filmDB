@@ -30,7 +30,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ versionId: str
       transcodeReasons: playback.transcodeReasons,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 502 });
+    // Detail stays in the server log: upstream messages can quote URLs and
+    // responses that must not reach a browser.
+    console.error(`[jellyfin-playback] session for version ${versionId} failed:`, err);
+    return NextResponse.json({ error: "Jellyfin could not start playback for this file." }, { status: 502 });
   }
 }
