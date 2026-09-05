@@ -52,6 +52,12 @@ export interface VideoPlaybackPlan {
   /** Apply `-tag:v hvc1` when muxing HEVC into MP4 — the default `hev1` tag
    *  is unreliable for Apple's own players/Safari. */
   hevcTag: boolean;
+  /** What the Original variant's streams will be after the actions above:
+   *  the source codec when copied, h264 / aac when transcoded. Feeds
+   *  mseMimeForVariant so the player can ask MediaSource.isTypeSupported
+   *  before choosing hls.js over a native player. */
+  outputVideoCodec: string;
+  outputAudioCodec: string | null;
   reason: string;
 }
 
@@ -141,6 +147,11 @@ export function planVideoPlayback(input: VideoPlaybackInput): VideoPlaybackPlan 
   const audioStreamIndex = audioChoice ? audioChoice.index : null;
   const audioAction: StreamAction | "none" = audioChoice ? audioChoice.action : "none";
 
+  const chosenTrack = audioChoice ? input.audioTracks.find((t) => t.streamIdx === audioChoice.index) : undefined;
+  const outputVideoCodec = videoAction === "copy" ? videoCodec : "h264";
+  const outputAudioCodec =
+    audioAction === "none" ? null : audioAction === "transcode" ? "aac" : (chosenTrack?.codec ?? "").toLowerCase() || null;
+
   const canDirectPlay =
     videoAction === "copy" && audioAction !== "transcode" && MP4_LIKE_CONTAINERS.has(container);
 
@@ -153,6 +164,8 @@ export function planVideoPlayback(input: VideoPlaybackInput): VideoPlaybackPlan 
       audioStreamIndex,
       audioAction,
       hevcTag,
+      outputVideoCodec,
+      outputAudioCodec,
       reason: `${videoCodec} in .${container || "?"} with ${audioAction === "none" ? "no audio" : "a compatible audio track"} — already playable`,
     };
   }
@@ -168,8 +181,35 @@ export function planVideoPlayback(input: VideoPlaybackInput): VideoPlaybackPlan 
     audioStreamIndex,
     audioAction,
     hevcTag,
+    outputVideoCodec,
+    outputAudioCodec,
     reason: reasons.join("; ") || "needs preparation",
   };
+}
+
+// RFC 6381 codec strings for a MediaSource.isTypeSupported probe. The exact
+// profile/level doesn't matter for the question being asked ("can this
+// browser's MSE decode this codec family at all"); these are the safe,
+// universally recognised forms.
+const MSE_VIDEO_CODEC: Record<string, string> = { h264: "avc1.640028", hevc: "hvc1.1.6.L120.B0", h265: "hvc1.1.6.L120.B0" };
+const MSE_AUDIO_CODEC: Record<string, string> = { aac: "mp4a.40.2", ac3: "ac-3", eac3: "ec-3" };
+
+/**
+ * The fMP4 MIME type a variant's segments will carry, for the player to
+ * check against MediaSource.isTypeSupported before choosing hls.js over
+ * the browser's native HLS. Null when a codec isn't one we have a string
+ * for -- the player then keeps the native path, which decodes anything
+ * the platform can.
+ */
+export function mseMimeForVariant(plan: VideoPlaybackPlan, variant: Variant): string | null {
+  const video = variant === "remote" ? "h264" : plan.outputVideoCodec;
+  const audio = variant === "remote" ? (plan.outputAudioCodec === null ? null : "aac") : plan.outputAudioCodec;
+  const v = MSE_VIDEO_CODEC[video];
+  if (!v) return null;
+  if (audio === null) return `video/mp4; codecs="${v}"`;
+  const a = MSE_AUDIO_CODEC[audio];
+  if (!a) return null;
+  return `video/mp4; codecs="${v},${a}"`;
 }
 
 // Simple per-channel-count AAC bitrate — generous enough that the transcode

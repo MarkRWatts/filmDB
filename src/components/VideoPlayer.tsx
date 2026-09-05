@@ -6,9 +6,10 @@
 // from hls/<variant>/index.m3u8, which self-starts the ffmpeg job and hands
 // back an event playlist that grows as segments land -- so the viewer can
 // start within seconds, seek anywhere already written, and ride out a
-// dropped connection by re-fetching a segment. Safari, iOS and the tvOS
-// WKWebView play HLS natively; every other browser gets hls.js, loaded on
-// demand so it never ships to the browsers that don't need it.
+// dropped connection by re-fetching a segment. iOS and the tvOS WKWebView
+// play HLS natively; Safari on the Mac and every other browser get hls.js
+// (loaded on demand so it never ships to the browsers that don't need it)
+// -- see preferNativeHls for the reasoning and the Mac's codec gate.
 //
 // The native player and an event playlist: until ffmpeg writes ENDLIST the
 // playlist looks like a live broadcast to Apple's player -- duration is
@@ -143,18 +144,27 @@ function hasNativePlayerBridge(): boolean {
   return typeof window !== "undefined" && Boolean(window.webkit?.messageHandlers?.mediaVaultPlayer);
 }
 
-// Native HLS is the right choice only on Apple's WebKit (Safari, iOS, the
-// tvOS WKWebView bridge): it's the platform player, with AirPlay and
-// hardware decode. Chromium-based browsers have started answering "maybe"
-// to the HLS MIME type too, but their built-in support is partial and does
-// not honour an event playlist the way this app needs, so everything that
-// isn't Apple WebKit goes through hls.js's MediaSource path even when it
-// claims native support.
-function canPlayHlsNatively(video: HTMLVideoElement): boolean {
+// Native HLS or hls.js? Only Apple's WebKit is a candidate for native at
+// all: Chromium-based browsers answer "maybe" to the HLS MIME type but
+// their built-in support is partial and doesn't honour an event playlist
+// the way this app needs. Within WebKit: iPhone/iPad keep the platform
+// player (AirPlay, lock-screen controls, the system full-screen UI), as
+// does anything without MediaSource. Safari on the Mac goes through hls.js
+// whenever its MSE can decode this stream's codecs (asked via the MIME type
+// /status computed for the variant): the native player shows an
+// in-progress playlist as "Live Broadcast" with no timeline until ffmpeg
+// finishes, while hls.js reports the written length as a finite, growing
+// duration with a real scrubber. The trade is AirPlay from the Mac, which
+// MSE playback can't offer.
+function preferNativeHls(video: HTMLVideoElement, mseMime: string | null): boolean {
   if (video.canPlayType("application/vnd.apple.mpegurl") === "") return false;
   const ua = navigator.userAgent;
   const appleWebKit = /AppleWebKit/.test(ua) && !/Chrome|Chromium|CriOS|Edg|OPR|Android/.test(ua);
-  return appleWebKit || typeof MediaSource === "undefined";
+  if (!appleWebKit) return false;
+  if (typeof MediaSource === "undefined") return true;
+  const touchApple = /iPhone|iPad|iPod/.test(ua) || navigator.maxTouchPoints > 1;
+  if (touchApple) return true;
+  return !(mseMime !== null && MediaSource.isTypeSupported(mseMime));
 }
 
 export default function VideoPlayer({
@@ -227,6 +237,8 @@ export default function VideoPlayer({
   // and the element's is Infinity on a native in-progress playlist, so
   // without this nothing was ever saved for a film still being prepared.
   const knownDurationRef = useRef<number | null>(null);
+  // The variant's fMP4 MIME type from /status, for preferNativeHls.
+  const mseMimeRef = useRef<string | null>(null);
   // What the unmount cleanup needs to send the leave beacon for (state
   // isn't readable from a []-deps cleanup).
   const latestRef = useRef<{ variant: Variant; tier: Tier | null }>({ variant, tier: null });
@@ -272,6 +284,7 @@ export default function VideoPlayer({
       durationIsFinalRef.current = status.state === "direct" || status.state === "ready";
       knownDurationRef.current =
         typeof status.durationSecs === "number" && status.durationSecs > 0 ? status.durationSecs : null;
+      mseMimeRef.current = typeof status.mseMime === "string" ? status.mseMime : null;
 
       if (progressRes?.ok) {
         const progress = await progressRes.json().catch(() => null);
@@ -368,7 +381,7 @@ export default function VideoPlayer({
           return;
         }
       }
-      if (!useHls || canPlayHlsNatively(video)) {
+      if (!useHls || preferNativeHls(video, mseMimeRef.current)) {
         // A fresh play of an in-progress playlist must be pinned to 0:00,
         // or the native player starts at the live edge (see the header).
         // Harmless for a finished playlist or direct play, which start

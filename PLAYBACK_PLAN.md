@@ -223,8 +223,11 @@ position, direct play by byte range). D is the manual pass in
   covers it, holding paused with a "preparing up to" note until then
   (src/lib/pending-seek.ts). The native controls still say "Live
   Broadcast" without a scrubber while a prepare is in flight — that label
-  is the browser's, and only a finished playlist (or a switch to hls.js
-  over MSE on Safari desktop, not done) changes it.
+  is the browser's — so Safari on the Mac now uses hls.js over MSE like
+  every non-Apple browser, gated on `MediaSource.isTypeSupported` for the
+  variant's codecs (`/status` returns `mseMime`, from
+  `mseMimeForVariant`). iPhone/iPad keep the native player. The Mac loses
+  AirPlay for in-app playback in exchange for a real timeline.
 - **Stopping work nobody wants.** Every playlist/segment request re-arms a
   ten-minute idle timer on the job (a paused player or a VPN blip must not
   restart a two-hour transcode from byte 0). A deliberate close is a
