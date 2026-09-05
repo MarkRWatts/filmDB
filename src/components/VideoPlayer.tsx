@@ -40,6 +40,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type Hls from "hls.js";
 import { WATCH_PROGRESS_MIN_SECS, WATCH_PROGRESS_REPORT_INTERVAL_SECS } from "@/lib/constants";
 import { decidePendingSeek, formatClock, timeRangesToArray } from "@/lib/pending-seek";
+import { PLAYLIST_WAIT_MAX_MS, classifyPlaylistFailure, classifyPlaylistResponse } from "@/lib/playlist-wait";
 
 type UiState = "checking" | "playing" | "handed-off" | "error";
 type Tier = "direct" | "prepare";
@@ -94,6 +95,31 @@ declare global {
       };
     };
   }
+}
+
+// Poll the playlist until the server has a real one to give (200), then
+// resolve null; resolve an error message if it says the prepare failed or
+// the wait runs out. `cancelled` is checked between polls so a torn-down
+// player stops asking. Each poll can itself sit on the server for up to
+// 30s while it waits for the first segment, which also keeps the job's
+// idle timer fed.
+async function waitForPlaylist(url: string, cancelled: () => boolean): Promise<string | null> {
+  const deadline = Date.now() + PLAYLIST_WAIT_MAX_MS;
+  while (!cancelled()) {
+    let poll;
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      const bodyError = res.ok ? null : await res.json().then((b) => (typeof b?.error === "string" ? b.error : null)).catch(() => null);
+      poll = classifyPlaylistResponse(res.status, res.headers.get("Retry-After"), bodyError);
+    } catch {
+      poll = classifyPlaylistFailure();
+    }
+    if (poll.kind === "ready") return null;
+    if (poll.kind === "error") return poll.message;
+    if (Date.now() >= deadline) return "Preparation is taking too long. Try again in a minute.";
+    await new Promise((r) => setTimeout(r, poll.afterMs));
+  }
+  return null;
 }
 
 function hasNativePlayerBridge(): boolean {
@@ -170,6 +196,9 @@ export default function VideoPlayer({
   // playlist whose end the target overshoots) is given up rather than kept
   // forever.
   const [holdingFor, setHoldingFor] = useState<{ target: number; readyUpTo: number | null } | null>(null);
+  // Waiting for the playlist's first segment before the source is attached
+  // (see waitForPlaylist).
+  const [preparing, setPreparing] = useState(false);
   const holdPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const holdProgressRef = useRef<{ readyUpTo: number | null; since: number }>({ readyUpTo: null, since: 0 });
   // Whether a finite duration reported by the element is the film's real
@@ -288,6 +317,22 @@ export default function VideoPlayer({
 
     async function attach() {
       if (!video) return;
+      if (useHls) {
+        // Don't hand the playlist to a player until it exists: the route
+        // self-starts the job and waits up to 30s for the first segment,
+        // but under load that has taken longer, and a 503 is a media error
+        // to the native player (hls.js would retry; this keeps both paths
+        // the same). See src/lib/playlist-wait.ts.
+        setPreparing(true);
+        const outcome = await waitForPlaylist(sourceUrl, () => disposed);
+        if (disposed) return;
+        setPreparing(false);
+        if (outcome !== null) {
+          setUiState("error");
+          setMessage(outcome);
+          return;
+        }
+      }
       if (!useHls || canPlayHlsNatively(video)) {
         // A fresh play of an in-progress playlist must be pinned to 0:00,
         // or the native player starts at the live edge (see the header).
@@ -580,6 +625,13 @@ export default function VideoPlayer({
                     Play from the start instead
                   </button>
                 </div>
+              ) : preparing ? (
+                <p
+                  role="status"
+                  className="pointer-events-none absolute bottom-3 left-3 rounded-full bg-black/60 px-3 py-1 text-xs text-white/80"
+                >
+                  Preparing… waiting for the first segment
+                </p>
               ) : (
                 buffering && (
                   <p className="pointer-events-none absolute bottom-3 left-3 rounded-full bg-black/60 px-3 py-1 text-xs text-white/80">
