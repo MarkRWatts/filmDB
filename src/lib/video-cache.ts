@@ -38,6 +38,7 @@ import {
   REMOTE_VIDEO_MAXRATE,
   type Variant,
   type VideoPlaybackPlan,
+  mseMimeForVariant,
 } from "@/lib/video-playback";
 
 export type MediaKind = "film" | "scene";
@@ -47,12 +48,15 @@ export { parseVariant, VARIANTS } from "@/lib/video-playback";
 // Playable states carry the probed duration: while a playlist is still
 // being written Apple's native player reports duration = Infinity, and the
 // player needs the real length to save progress and judge "completed".
+// ... and the fMP4 MIME type the variant's segments will carry (see
+// mseMimeForVariant), so the player can ask MediaSource.isTypeSupported
+// before preferring hls.js over the platform's native HLS.
 export type VideoStatus =
   | { state: "not-found" }
-  | { state: "direct"; durationSecs: number | null }
-  | { state: "ready"; durationSecs: number | null }
-  | { state: "preparing"; durationSecs: number | null }
-  | { state: "idle"; durationSecs: number | null }
+  | { state: "direct"; durationSecs: number | null; mseMime: string | null }
+  | { state: "ready"; durationSecs: number | null; mseMime: string | null }
+  | { state: "preparing"; durationSecs: number | null; mseMime: string | null }
+  | { state: "idle"; durationSecs: number | null; mseMime: string | null }
   | { state: "error"; message: string };
 
 interface ResolvedMedia {
@@ -650,18 +654,19 @@ export async function getVideoStatus(kind: MediaKind, id: number, variant: Varia
   // "direct" is a property of the source, not a variant: a remote rendition
   // of a direct-playable file is still a prepare.
   const durationSecs = media.durationSecs;
+  const mseMime = mseMimeForVariant(plan, variant);
   if (plan.tier === "direct" && variant === "original") {
     const sourceAbsPath = resolveSourcePath(kind, media.filePath);
     if (!sourceAbsPath || !(await fileExists(sourceAbsPath))) return { state: "not-found" };
-    return { state: "direct", durationSecs };
+    return { state: "direct", durationSecs, mseMime };
   }
 
-  if (await isComplete(entryDir(key))) return { state: "ready", durationSecs };
-  if (jobs.has(key)) return { state: "preparing", durationSecs };
+  if (await isComplete(entryDir(key))) return { state: "ready", durationSecs, mseMime };
+  if (jobs.has(key)) return { state: "preparing", durationSecs, mseMime };
   await discardOrphanedEntry(key);
   const error = jobErrors.get(key);
   if (error) return { state: "error", message: error };
-  return { state: "idle", durationSecs };
+  return { state: "idle", durationSecs, mseMime };
 }
 
 /** POST /prepare hits this: starts the job (if needed) and returns the
@@ -675,11 +680,12 @@ export async function triggerVideoPrepare(kind: MediaKind, id: number, variant: 
   const key = cacheKey(kind, id, variant);
 
   if (plan.tier === "direct" && variant === "original") return getVideoStatus(kind, id, variant);
-  if (await isComplete(entryDir(key))) return { state: "ready", durationSecs: media.durationSecs };
+  const mseMime = mseMimeForVariant(plan, variant);
+  if (await isComplete(entryDir(key))) return { state: "ready", durationSecs: media.durationSecs, mseMime };
 
   await discardOrphanedEntry(key);
   requestVideoPrepare(kind, id, variant, media, plan);
-  return { state: "preparing", durationSecs: media.durationSecs };
+  return { state: "preparing", durationSecs: media.durationSecs, mseMime };
 }
 
 export type VideoStreamResolution =

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFfmpegArgs, buildHlsFfmpegArgs, parseVariant, planVideoPlayback } from "./video-playback";
+import { buildFfmpegArgs, buildHlsFfmpegArgs, mseMimeForVariant, parseVariant, planVideoPlayback } from "./video-playback";
 
 describe("buildHlsFfmpegArgs", () => {
   const remuxPlan = planVideoPlayback({
@@ -353,5 +353,41 @@ describe("pickAudioTrack (via planVideoPlayback)", () => {
       ],
     })!;
     expect(plan).toMatchObject({ audioStreamIndex: 2, audioAction: "copy" });
+  });
+});
+
+describe("output codecs and mseMimeForVariant", () => {
+  it("reports copied codecs for a remux and h264/aac for transcodes", () => {
+    const remux = planVideoPlayback({
+      videoCodec: "h264",
+      container: "mkv",
+      audioTracks: [{ streamIdx: 1, codec: "ac3", profile: null, channels: 6 }],
+    })!;
+    expect(remux).toMatchObject({ outputVideoCodec: "h264", outputAudioCodec: "ac3" });
+    expect(mseMimeForVariant(remux, "original")).toBe('video/mp4; codecs="avc1.640028,ac-3"');
+    expect(mseMimeForVariant(remux, "remote")).toBe('video/mp4; codecs="avc1.640028,mp4a.40.2"');
+
+    const transcode = planVideoPlayback({
+      videoCodec: "vc1",
+      container: "mkv",
+      audioTracks: [{ streamIdx: 1, codec: "dts", profile: "DTS-HD MA", channels: 8, isDefault: true }],
+    })!;
+    expect(transcode).toMatchObject({ outputVideoCodec: "h264", outputAudioCodec: "aac" });
+    expect(mseMimeForVariant(transcode, "original")).toBe('video/mp4; codecs="avc1.640028,mp4a.40.2"');
+  });
+
+  it("handles HEVC, no audio, and codecs it has no string for", () => {
+    const hevc = planVideoPlayback({ videoCodec: "hevc", container: "mkv", audioTracks: [] })!;
+    expect(mseMimeForVariant(hevc, "original")).toBe('video/mp4; codecs="hvc1.1.6.L120.B0"');
+    expect(mseMimeForVariant(hevc, "remote")).toBe('video/mp4; codecs="avc1.640028"');
+
+    const odd = planVideoPlayback({
+      videoCodec: "h264",
+      container: "mkv",
+      audioTracks: [{ streamIdx: 1, codec: "opus", profile: null, channels: 2, isDefault: true }],
+    })!;
+    // opus isn't in COMPATIBLE_AUDIO_CODECS, so it's transcoded to aac and the string is known
+    expect(mseMimeForVariant(odd, "original")).toBe('video/mp4; codecs="avc1.640028,mp4a.40.2"');
+    expect(mseMimeForVariant({ ...odd, outputVideoCodec: "av1" }, "original")).toBeNull();
   });
 });
