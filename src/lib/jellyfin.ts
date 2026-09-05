@@ -45,6 +45,16 @@ function authHeaders(): Record<string, string> {
   return { Authorization: `MediaBrowser Token="${key}"` };
 }
 
+/** For src/lib/jellyfin-playback.ts, which talks to the same server. */
+export function jellyfinBaseUrl(): string {
+  return baseUrl();
+}
+export function jellyfinApiKey(): string {
+  const key = process.env.JELLYFIN_API_KEY;
+  if (!key) throw new Error("JELLYFIN_API_KEY not set");
+  return key;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function jellyfinFetch(pathname: string, params: Record<string, string> = {}): Promise<any> {
   const url = new URL(`${baseUrl()}${pathname}`);

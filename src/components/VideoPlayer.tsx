@@ -44,6 +44,12 @@ import { decidePendingSeek, formatClock, timeRangesToArray } from "@/lib/pending
 import { PLAYLIST_WAIT_MAX_MS, classifyPlaylistFailure, classifyPlaylistResponse } from "@/lib/playlist-wait";
 
 type UiState = "checking" | "playing" | "handed-off" | "error";
+/** Where the stream comes from: this app's own ffmpeg pipeline (/status,
+ *  /stream, hls/<variant>/...) or Jellyfin's transcoder brokered through
+ *  /jf/... (src/lib/jellyfin-playback.ts). Jellyfin serves a complete VOD
+ *  playlist for the whole runtime, so none of the in-progress-playlist
+ *  handling below comes into play there -- it simply never waits. */
+export type PlaybackSource = "local" | "jellyfin";
 type Tier = "direct" | "prepare";
 type Variant = "original" | "remote";
 
@@ -132,6 +138,14 @@ function sendLeave(basePath: string, id: number, variant: Variant): void {
   fetch(`${basePath}/${id}/leave?variant=${variant}`, { method: "POST", keepalive: true }).catch(() => {});
 }
 
+// Jellyfin mode's equivalent of the leave beacon: stop that play session's
+// transcoder now (POST /jf/stop). Fire-and-forget with keepalive.
+function sendJellyfinStop(basePath: string, id: number, playSessionId: string): void {
+  fetch(`${basePath}/${id}/jf/stop?playSessionId=${encodeURIComponent(playSessionId)}`, { method: "POST", keepalive: true }).catch(
+    () => {},
+  );
+}
+
 // The duration a progress report should carry: the element's when it knows
 // one, else the probed runtime from /status (native HLS reports Infinity
 // while the playlist is still being written).
@@ -173,10 +187,13 @@ export default function VideoPlayer({
   onClose,
   basePath = "/api/video",
   trackProgress = true,
+  source = "local",
 }: {
   versionId: number;
   title: string;
   onClose: () => void;
+  /** See PlaybackSource. Films with a Jellyfin item use "jellyfin". */
+  source?: PlaybackSource;
   /** Which streaming API to hit — defaults to films' /api/video. Scenes use
    *  /api/adult-video (see video-cache.ts's kind-namespacing). */
   basePath?: string;
@@ -195,12 +212,23 @@ export default function VideoPlayer({
   const [variant, setVariant] = useState<Variant>(() => (typeof window === "undefined" ? "original" : readQuality()));
   const [showRemoteNudge, setShowRemoteNudge] = useState(false);
 
+  // Jellyfin mode: the current playback session (its proxied playlist URL
+  // and the id to stop it with). Null until /jf/session has answered, and
+  // replaced on a quality switch.
+  const [jfSession, setJfSession] = useState<{ playlistUrl: string; playSessionId: string } | null>(null);
+
   const streamUrl = `${basePath}/${versionId}/stream`;
   const playlistUrl = (v: Variant) => `${basePath}/${versionId}/hls/${v}/index.m3u8`;
   /** What this player is (or would be) playing: /stream for direct-play
    *  originals, the HLS playlist otherwise -- a remote rendition of a
-   *  direct-play file is still HLS. */
-  const sourceUrl = tier === "direct" && variant === "original" ? streamUrl : playlistUrl(variant);
+   *  direct-play file is still HLS. In Jellyfin mode it's whatever the
+   *  session handed back (empty until then; the attach effect waits). */
+  const sourceUrl =
+    source === "jellyfin"
+      ? (jfSession?.playlistUrl ?? "")
+      : tier === "direct" && variant === "original"
+        ? streamUrl
+        : playlistUrl(variant);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -241,15 +269,21 @@ export default function VideoPlayer({
   const mseMimeRef = useRef<string | null>(null);
   // What the unmount cleanup needs to send the leave beacon for (state
   // isn't readable from a []-deps cleanup).
-  const latestRef = useRef<{ variant: Variant; tier: Tier | null }>({ variant, tier: null });
-  latestRef.current = { variant, tier };
+  const latestRef = useRef<{ variant: Variant; tier: Tier | null; jfPlaySessionId: string | null }>({
+    variant,
+    tier: null,
+    jfPlaySessionId: null,
+  });
+  latestRef.current = { variant, tier, jfPlaySessionId: jfSession?.playSessionId ?? null };
 
   useEffect(() => {
     let cancelled = false;
 
     async function check() {
       const [statusRes, progressRes] = await Promise.all([
-        fetch(`${basePath}/${versionId}/status?variant=${variant}`, { cache: "no-store" }),
+        source === "jellyfin"
+          ? fetch(`${basePath}/${versionId}/jf/session?variant=${variant}`, { method: "POST", cache: "no-store" })
+          : fetch(`${basePath}/${versionId}/status?variant=${variant}`, { cache: "no-store" }),
         // Best-effort: if this fails for any reason we just don't resume —
         // not worth blocking playback over. Skipped entirely when this
         // media type doesn't track progress (see trackProgress's doc
@@ -261,30 +295,47 @@ export default function VideoPlayer({
       if (cancelled) return;
 
       if (!statusRes.ok) {
+        const body = await statusRes.json().catch(() => null);
         setUiState("error");
-        setMessage("Could not reach the server.");
+        setMessage(
+          typeof body?.error === "string" && statusRes.status !== 401 ? body.error : "Could not reach the server.",
+        );
         return;
       }
 
       const status = await statusRes.json();
       if (cancelled) return;
 
-      if (status.state === "not-found") {
+      if (source === "jellyfin") {
+        // A complete VOD playlist: the duration is final and every seek is
+        // instant, so the in-progress machinery is inert. Native HLS is the
+        // better player wherever it exists (mseMime null keeps Safari on it).
+        setTier("prepare");
+        durationIsFinalRef.current = true;
+        knownDurationRef.current =
+          typeof status.durationSecs === "number" && status.durationSecs > 0 ? status.durationSecs : null;
+        mseMimeRef.current = null;
+        setJfSession({ playlistUrl: status.playlistUrl, playSessionId: status.playSessionId });
+      }
+
+      if (source === "local" && status.state === "not-found") {
         setUiState("error");
         setMessage("This version isn't playable.");
         return;
       }
-      if (status.state === "error") {
+      if (source === "local" && status.state === "error") {
         setUiState("error");
         setMessage(status.message ?? "Preparation failed.");
         return;
       }
-      const resolvedTier: Tier = status.state === "direct" ? "direct" : "prepare";
-      setTier(resolvedTier);
-      durationIsFinalRef.current = status.state === "direct" || status.state === "ready";
-      knownDurationRef.current =
-        typeof status.durationSecs === "number" && status.durationSecs > 0 ? status.durationSecs : null;
-      mseMimeRef.current = typeof status.mseMime === "string" ? status.mseMime : null;
+      const resolvedTier: Tier = source === "jellyfin" ? "prepare" : status.state === "direct" ? "direct" : "prepare";
+      if (source === "local") {
+        setTier(resolvedTier);
+        durationIsFinalRef.current = status.state === "direct" || status.state === "ready";
+        knownDurationRef.current =
+          typeof status.durationSecs === "number" && status.durationSecs > 0 ? status.durationSecs : null;
+        mseMimeRef.current = typeof status.mseMime === "string" ? status.mseMime : null;
+      }
 
       if (progressRes?.ok) {
         const progress = await progressRes.json().catch(() => null);
@@ -299,7 +350,8 @@ export default function VideoPlayer({
       }
 
       if (hasNativePlayerBridge()) {
-        const url = resolvedTier === "direct" && variant === "original" ? streamUrl : playlistUrl(variant);
+        const url =
+          source === "jellyfin" ? status.playlistUrl : resolvedTier === "direct" && variant === "original" ? streamUrl : playlistUrl(variant);
         const absoluteUrl = new URL(url, window.location.origin).toString();
         window.webkit!.messageHandlers!.mediaVaultPlayer!.postMessage({ streamURL: absoluteUrl, title });
         setUiState("handed-off");
@@ -319,7 +371,7 @@ export default function VideoPlayer({
     // The initial check runs once per player; a quality change re-attaches
     // the source below rather than re-checking status.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [versionId, title, onClose, streamUrl, basePath, trackProgress]);
+  }, [versionId, title, onClose, streamUrl, basePath, trackProgress, source]);
 
   // Flush whatever position the <video> element is currently at. Called on
   // pause, on the modal's own Close button, and on unmount (covers a parent
@@ -347,16 +399,21 @@ export default function VideoPlayer({
       flushProgress();
       // Whatever way this player goes away (Close, route change), let the
       // server hurry the job along if nobody else is watching.
-      const { variant: v, tier: t } = latestRef.current;
-      if (t === "prepare" || v === "remote") sendLeave(basePath, versionId, v);
+      const { variant: v, tier: t, jfPlaySessionId } = latestRef.current;
+      if (source === "jellyfin") {
+        if (jfPlaySessionId) sendJellyfinStop(basePath, versionId, jfPlaySessionId);
+      } else if (t === "prepare" || v === "remote") {
+        sendLeave(basePath, versionId, v);
+      }
     };
-  }, [flushProgress, basePath, versionId]);
+  }, [flushProgress, basePath, versionId, source]);
 
   // Attach the source to the <video> whenever what we should be playing
   // changes. Direct-play: plain src. HLS: native where the browser can, else
   // hls.js. hls.js is torn down and rebuilt on a quality switch.
   useEffect(() => {
     if (uiState !== "playing" || tier === null) return;
+    if (source === "jellyfin" && !sourceUrl) return;
     const video = videoRef.current;
     if (!video) return;
 
@@ -449,7 +506,7 @@ export default function VideoPlayer({
         video.load();
       }
     };
-  }, [uiState, tier, sourceUrl, streamUrl]);
+  }, [uiState, tier, sourceUrl, streamUrl, source]);
 
   function handleClose() {
     flushProgress();
@@ -466,13 +523,35 @@ export default function VideoPlayer({
     setShowRemoteNudge(false);
     // The other variant is its own playlist, possibly only just started: its
     // duration is not final until a fresh status says so.
-    durationIsFinalRef.current = false;
     stopHoldPoll();
+    rememberQuality(next);
+    setVariant(next);
+    if (source === "jellyfin") {
+      // A new Jellyfin session at the new bitrate; the old transcode is
+      // stopped explicitly. The pending seek carries the position across.
+      const old = jfSession?.playSessionId ?? null;
+      if (old) sendJellyfinStop(basePath, versionId, old);
+      setJfSession(null);
+      fetch(`${basePath}/${versionId}/jf/session?variant=${next}`, { method: "POST", cache: "no-store" })
+        .then(async (res) => {
+          const body = await res.json().catch(() => null);
+          if (!res.ok || typeof body?.playlistUrl !== "string") {
+            setUiState("error");
+            setMessage(typeof body?.error === "string" ? body.error : "Could not switch quality.");
+            return;
+          }
+          setJfSession({ playlistUrl: body.playlistUrl, playSessionId: body.playSessionId });
+        })
+        .catch(() => {
+          setUiState("error");
+          setMessage("Could not reach the server.");
+        });
+      return;
+    }
+    durationIsFinalRef.current = false;
     // The outgoing variant's job would otherwise run on for the full idle
     // window with nobody watching it.
     if (tier === "prepare" || variant === "remote") sendLeave(basePath, versionId, variant);
-    rememberQuality(next);
-    setVariant(next);
   }
 
   function stopHoldPoll() {

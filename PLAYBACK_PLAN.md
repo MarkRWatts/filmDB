@@ -206,15 +206,24 @@ position, direct play by byte range). D is the manual pass in
 
 ## Status (5 Sep 2026)
 
-The in-app Play button is hidden unless `IN_APP_PLAYBACK=1`. A day of
-production testing showed the streaming-while-preparing design working
-but living at its limits: a 4-core VM reading Blu-ray rips over a CIFS
-share that tops out near 90 Mbit/s, three player implementations with
-different ideas about an event playlist, and no way to seek past what
-ffmpeg has written. Playback is moving to Jellyfin (already deployed,
-already SSO-linked, and built for exactly this); MediaVault stays the
-catalogue. The pipeline and its e2e remain in the tree, exercised by
-`scripts/e2e-playback.ts`, until that move is done.
+In-app playback now goes through Jellyfin for every Version the sync has
+matched to a Jellyfin item (`src/lib/jellyfin-playback.ts`, the
+`/api/video/<id>/jf/*` routes, `VideoPlayer` in `source="jellyfin"`
+mode). A day of production testing showed this app's own
+streaming-while-preparing design working but living at its limits: a
+4-core VM reading Blu-ray rips over a CIFS share that tops out near
+90 Mbit/s, three player implementations with different ideas about an
+event playlist, and no way to seek past what ffmpeg has written. Jellyfin
+serves a complete VOD playlist for the whole runtime and starts ffmpeg at
+whatever segment is asked for, so every player sees a real duration and
+seeks anywhere; it also picks the source's default audio track itself.
+MediaVault brokers it (PlaybackInfo server-side, playlist and segments
+proxied with the API key stripped -- the browser never sees the key) and
+keeps its own WatchProgress. Original = 120 Mbit/s ceiling (video copied,
+audio transcoded where needed); Remote = 4 Mbit/s and ≤1280 wide.
+Subtitles are off for now (a PGS track would be burned in, forcing a
+video re-encode). The local pipeline stays in the tree behind
+`IN_APP_PLAYBACK=1`, exercised by `scripts/e2e-playback.ts`.
 
 ## What to watch for
 

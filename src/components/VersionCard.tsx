@@ -2,6 +2,7 @@ import FormatBadge from "@/components/FormatBadge";
 import ResolutionBadge from "@/components/ResolutionBadge";
 import HdrBadge from "@/components/HdrBadge";
 import PlayButton from "@/components/PlayButton";
+import type { PlaybackSource } from "@/components/VideoPlayer";
 import { audioBadge, audioFamily } from "@/lib/audio";
 import type { VersionView } from "@/lib/queries";
 
@@ -19,13 +20,14 @@ export default function VersionCard({
   version,
   filmTitle,
   jellyfinHref,
-  showPlay = false,
+  playSource = null,
 }: {
   version: VersionView;
   filmTitle: string;
   jellyfinHref?: string | null;
-  /** Render the in-app Play button (parked by default — see the film page). */
-  showPlay?: boolean;
+  /** Which pipeline the in-app Play button uses, or null for no button
+   *  (see the film page for the decision). */
+  playSource?: PlaybackSource | null;
 }) {
   const specs: { label: string; value: string }[] = [
     { label: "Resolution", value: version.resolution },
@@ -45,7 +47,7 @@ export default function VersionCard({
           <span className="text-sm italic text-text-muted">{version.edition}</span>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {showPlay && <PlayButton versionId={version.id} title={filmTitle} />}
+          {playSource && <PlayButton versionId={version.id} title={filmTitle} source={playSource} />}
           {jellyfinHref && (
             <a
               href={jellyfinHref}
