@@ -19,10 +19,13 @@ export default function VersionCard({
   version,
   filmTitle,
   jellyfinHref,
+  showPlay = false,
 }: {
   version: VersionView;
   filmTitle: string;
   jellyfinHref?: string | null;
+  /** Render the in-app Play button (parked by default — see the film page). */
+  showPlay?: boolean;
 }) {
   const specs: { label: string; value: string }[] = [
     { label: "Resolution", value: version.resolution },
@@ -42,7 +45,7 @@ export default function VersionCard({
           <span className="text-sm italic text-text-muted">{version.edition}</span>
         )}
         <div className="ml-auto flex items-center gap-2">
-          <PlayButton versionId={version.id} title={filmTitle} />
+          {showPlay && <PlayButton versionId={version.id} title={filmTitle} />}
           {jellyfinHref && (
             <a
               href={jellyfinHref}

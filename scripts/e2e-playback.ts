@@ -63,6 +63,9 @@ function startNextDev(dir: string, dbUrl: string): { child: ChildProcess; logPat
       ALLOWED_EMAILS: "",
       RESEND_API_KEY: "",
       MOVIES_PATH: path.join(dir, "movies"),
+      // The in-app Play button is parked in production; this suite is what
+      // keeps the pipeline behind it working.
+      IN_APP_PLAYBACK: "1",
       TVSHOWS_PATH: "",
       MUSIC_PATH: "",
       ADULT_PATH: "",
