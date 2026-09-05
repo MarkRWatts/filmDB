@@ -61,7 +61,15 @@ interface ResolvedMedia {
   videoCodec: string | null;
   container: string | null;
   durationSecs: number | null;
-  audioTracks: { streamIdx: number; codec: string | null; profile: string | null; channels: number | null }[];
+  audioTracks: {
+    streamIdx: number;
+    codec: string | null;
+    profile: string | null;
+    channels: number | null;
+    title: string | null;
+    isDefault: boolean;
+    isDescriptive: boolean;
+  }[];
 }
 
 export const PLAYLIST_NAME = "index.m3u8";

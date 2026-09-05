@@ -208,6 +208,8 @@ async function processVersion(
           channels: t.channels,
           layout: t.layout,
           title: t.title,
+          isDefault: t.isDefault,
+          isDescriptive: t.isDescriptive,
         })),
       });
     }

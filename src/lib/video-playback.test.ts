@@ -279,3 +279,79 @@ describe("buildFfmpegArgs", () => {
     expect(args[args.indexOf("-threads") + 1]).toBe("2");
   });
 });
+
+describe("pickAudioTrack (via planVideoPlayback)", () => {
+  // Captain Marvel's real layout: lossless 7.1 flagged default, a plain DTS
+  // 5.1, and two AC-3 "Stereo" tracks of which the first is the audio
+  // description. "First copyable codec" used to pick the description.
+  const captainMarvel = [
+    { streamIdx: 1, codec: "dts", profile: "DTS-HD MA", channels: 8, title: "Surround 7.1", isDefault: true },
+    { streamIdx: 2, codec: "dts", profile: "DTS", channels: 6, title: "Surround 5.1" },
+    { streamIdx: 3, codec: "ac3", profile: null, channels: 2, title: "Stereo", isDescriptive: true },
+    { streamIdx: 4, codec: "ac3", profile: null, channels: 2, title: "Stereo" },
+  ];
+
+  it("never picks a descriptive track, and transcodes the default when the only copyable track loses channels", () => {
+    const plan = planVideoPlayback({ videoCodec: "h264", container: "mkv", audioTracks: captainMarvel })!;
+    expect(plan).toMatchObject({ tier: "prepare", audioStreamIndex: 1, audioAction: "transcode" });
+    expect(plan.reason).toContain("transcoding the source's default");
+  });
+
+  it("copies the default track when it is itself compatible", () => {
+    const plan = planVideoPlayback({
+      videoCodec: "h264",
+      container: "mkv",
+      audioTracks: [
+        { streamIdx: 1, codec: "dts", profile: "DTS-HD MA", channels: 8 },
+        { streamIdx: 2, codec: "eac3", profile: null, channels: 6, isDefault: true },
+      ],
+    })!;
+    expect(plan).toMatchObject({ audioStreamIndex: 2, audioAction: "copy" });
+  });
+
+  it("copies a compatible non-default track that keeps the default's channel count (free, no worse)", () => {
+    const plan = planVideoPlayback({
+      videoCodec: "h264",
+      container: "mkv",
+      audioTracks: [
+        { streamIdx: 1, codec: "dts", profile: "DTS", channels: 6, isDefault: true },
+        { streamIdx: 2, codec: "ac3", profile: null, channels: 6 },
+      ],
+    })!;
+    expect(plan).toMatchObject({ audioStreamIndex: 2, audioAction: "copy" });
+  });
+
+  it("recognises a description track by its title when the container didn't flag it", () => {
+    const plan = planVideoPlayback({
+      videoCodec: "h264",
+      container: "mkv",
+      audioTracks: [
+        { streamIdx: 1, codec: "ac3", profile: null, channels: 2, title: "English - Audio Description" },
+        { streamIdx: 2, codec: "ac3", profile: null, channels: 2, title: "Director's Commentary" },
+        { streamIdx: 3, codec: "ac3", profile: null, channels: 6, title: "Surround 5.1" },
+      ],
+    })!;
+    expect(plan).toMatchObject({ audioStreamIndex: 3, audioAction: "copy" });
+  });
+
+  it("falls back to any track when every track looks descriptive", () => {
+    const plan = planVideoPlayback({
+      videoCodec: "h264",
+      container: "mkv",
+      audioTracks: [{ streamIdx: 1, codec: "ac3", profile: null, channels: 2, title: "AD", isDescriptive: true }],
+    })!;
+    expect(plan).toMatchObject({ audioStreamIndex: 1, audioAction: "copy" });
+  });
+
+  it("keeps the old behaviour for rows without any flags: first compatible track by index", () => {
+    const plan = planVideoPlayback({
+      videoCodec: "h264",
+      container: "mkv",
+      audioTracks: [
+        { streamIdx: 1, codec: "dts", profile: "DTS-HD MA", channels: 8 },
+        { streamIdx: 2, codec: "ac3", profile: null, channels: 6 },
+      ],
+    })!;
+    expect(plan).toMatchObject({ audioStreamIndex: 2, audioAction: "copy" });
+  });
+});
