@@ -18,6 +18,14 @@ export interface ProbedAudioTrack {
   channels: number | null;
   layout: string | null;
   title: string | null;
+  /** ffprobe stream dispositions. `isDefault` is the container's own
+   *  "play this one" flag (MakeMKV/HandBrake set it on the main track);
+   *  `isDescriptive` covers visual_impaired / descriptions / comment — audio
+   *  description and commentary tracks, which must never be picked as the
+   *  main soundtrack (video-playback.ts). Older rows predate these columns
+   *  and read as false/false until re-probed. */
+  isDefault: boolean;
+  isDescriptive: boolean;
   /** Music-scanner fields — unused by the movie/TV probe callers. */
   sampleRate: number | null;
   bitDepth: number | null;
@@ -51,7 +59,7 @@ export interface ProbeResult {
 // on .m4a files can carry their own bits_per_raw_sample (e.g. "8" for the
 // cover image), which is ignored by only reading audioTracks[0].
 const SHOW_ENTRIES =
-  "format=duration,size:format_tags=date,year:stream=index,codec_type,codec_name,profile,width,height,channels,channel_layout,color_transfer,side_data_list,sample_rate,bits_per_raw_sample:stream_tags=language,title";
+  "format=duration,size:format_tags=date,year:stream=index,codec_type,codec_name,profile,width,height,channels,channel_layout,color_transfer,side_data_list,sample_rate,bits_per_raw_sample:stream_tags=language,title:stream_disposition=default,comment,visual_impaired,hearing_impaired,descriptions";
 
 const FFPROBE_ARGS = ["-hide_banner", "-loglevel", "error", "-show_entries", SHOW_ENTRIES, "-of", "json"];
 
@@ -85,6 +93,13 @@ interface FfprobeStream {
   sample_rate?: string;
   bits_per_raw_sample?: string;
   tags?: { language?: string; title?: string };
+  disposition?: {
+    default?: number;
+    comment?: number;
+    visual_impaired?: number;
+    hearing_impaired?: number;
+    descriptions?: number;
+  };
 }
 
 interface FfprobeJson {
@@ -100,7 +115,7 @@ function hasDoviSideData(stream: FfprobeStream | undefined): boolean {
   return (stream?.side_data_list ?? []).some((sd) => sd.side_data_type === "DOVI configuration record");
 }
 
-function parseFfprobeJson(stdout: string): ProbeResult {
+export function parseFfprobeJson(stdout: string): ProbeResult {
   const data: FfprobeJson = JSON.parse(stdout);
   const streams = data.streams ?? [];
 
@@ -115,6 +130,9 @@ function parseFfprobeJson(stdout: string): ProbeResult {
     channels: s.channels ?? null,
     layout: s.channel_layout ?? null,
     title: s.tags?.title ?? null,
+    isDefault: s.disposition?.default === 1,
+    isDescriptive:
+      s.disposition?.visual_impaired === 1 || s.disposition?.descriptions === 1 || s.disposition?.comment === 1,
     sampleRate: s.sample_rate ? Number(s.sample_rate) : null,
     bitDepth: s.bits_per_raw_sample ? Number(s.bits_per_raw_sample) : null,
   }));

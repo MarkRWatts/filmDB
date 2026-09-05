@@ -27,6 +27,12 @@ export interface AudioTrackInput {
   codec: string | null;
   profile: string | null;
   channels: number | null;
+  /** From ffprobe's stream disposition (AudioTrack.isDefault /
+   *  isDescriptive) and the track title. Optional: rows probed before these
+   *  were captured, and older tests, simply don't have them. */
+  isDefault?: boolean;
+  isDescriptive?: boolean;
+  title?: string | null;
 }
 
 export interface VideoPlaybackInput {
@@ -66,16 +72,51 @@ function isLosslessSource(codec: string | null, profile: string | null): boolean
   return false;
 }
 
+// Titles that mark an audio-description or commentary track when the
+// container didn't flag it (some rips carry the flag, many only the name).
+const DESCRIPTIVE_TITLE_RE = /audio\s*desc|descri(?:bed|ptive)|commentary|narrat|\bAD\b/i;
+
+function isDescriptiveTrack(t: AudioTrackInput): boolean {
+  return Boolean(t.isDescriptive) || DESCRIPTIVE_TITLE_RE.test(t.title ?? "");
+}
+
+function isCompatibleAudio(t: AudioTrackInput): boolean {
+  return COMPATIBLE_AUDIO_CODECS.has((t.codec ?? "").toLowerCase());
+}
+
+/**
+ * Which audio stream to serve, and whether it can be copied. Descriptive
+ * tracks (audio description, commentary) are never the main soundtrack,
+ * whatever their codec — a Blu-ray remux commonly carries its lossless main
+ * track first and a stereo AC-3 audio-description track after it, and
+ * "first copyable codec" used to land on the description (Captain Marvel,
+ * 5 Sep 2026). Among the rest, the container's default-flagged track is
+ * the source's own answer: copy it if compatible; otherwise copy a
+ * compatible track that keeps at least as many channels (free and no
+ * worse), else transcode the default. With no flags at all, fall back to
+ * the first compatible track, then to transcoding the best candidate.
+ */
 function pickAudioTrack(tracks: AudioTrackInput[]): { index: number; action: StreamAction } | null {
   if (tracks.length === 0) return null;
 
   const byIdx = [...tracks].sort((a, b) => a.streamIdx - b.streamIdx);
-  const compatible = byIdx.find((t) => COMPATIBLE_AUDIO_CODECS.has((t.codec ?? "").toLowerCase()));
+  const main = byIdx.filter((t) => !isDescriptiveTrack(t));
+  // Everything looks descriptive (mislabelled rip): better any sound than none.
+  const pool = main.length > 0 ? main : byIdx;
+
+  const preferred = pool.find((t) => t.isDefault) ?? null;
+  const compatible = pool.find(isCompatibleAudio) ?? null;
+
+  if (preferred && isCompatibleAudio(preferred)) return { index: preferred.streamIdx, action: "copy" };
+  if (preferred && compatible && (compatible.channels ?? 0) >= (preferred.channels ?? 0)) {
+    return { index: compatible.streamIdx, action: "copy" };
+  }
+  if (preferred) return { index: preferred.streamIdx, action: "transcode" };
   if (compatible) return { index: compatible.streamIdx, action: "copy" };
 
   // Nothing directly playable — transcode the best candidate: most channels,
   // tie-broken toward a lossless source.
-  const scored = byIdx.map((t) => ({
+  const scored = pool.map((t) => ({
     track: t,
     score: (t.channels ?? 0) * 10 + (isLosslessSource(t.codec, t.profile) ? 5 : 0),
   }));
@@ -119,7 +160,7 @@ export function planVideoPlayback(input: VideoPlaybackInput): VideoPlaybackPlan 
   const reasons: string[] = [];
   if (!MP4_LIKE_CONTAINERS.has(container)) reasons.push(`container .${container || "?"} needs remuxing`);
   if (!videoOk) reasons.push(`video codec ${videoCodec} needs transcoding`);
-  if (audioAction === "transcode") reasons.push("audio has no directly-playable track");
+  if (audioAction === "transcode") reasons.push("audio: no directly-playable main track (transcoding the source's default)");
 
   return {
     tier: "prepare",

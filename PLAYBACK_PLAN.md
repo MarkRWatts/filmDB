@@ -240,6 +240,17 @@ position, direct play by byte range). D is the manual pass in
   its prepare ever got a WatchProgress row (production had exactly one,
   for a title played after its cache completed). `/status` now returns
   the probed `durationSecs` and the player falls back to it.
+- **Audio track choice honours the source.** ffprobe's stream dispositions
+  are stored on AudioTrack (`isDefault`, `isDescriptive`) and
+  `pickAudioTrack` never serves a descriptive track (audio description,
+  commentary — by flag or by title), prefers the container's default track
+  (copy if compatible, else copy a compatible track with at least as many
+  channels, else transcode the default's audio to AAC), and only then
+  falls back to "first compatible by index". Before this, Captain Marvel
+  (DTS-HD MA 7.1 default + two AC-3 "Stereo" tracks, the first being the
+  description) played the description. Rows probed before 5 Sep 2026
+  carry no flags until `scripts/reprobe-audio-tracks.ts` (or a forced
+  scan) refreshes them.
 - **`-hls_time` and keyframes**: for stream-copied video, segment
   boundaries land on source keyframes, so segments can be longer than 6s
   on sources with sparse keyframes (some Blu-ray encodes use 2–5s GOPs,

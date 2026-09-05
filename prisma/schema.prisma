@@ -122,6 +122,12 @@ model AudioTrack {
   channels  Int?
   layout    String? // "5.1", "stereo"…
   title     String? // "Surround 5.1", "Director's Commentary"…
+  // ffprobe stream dispositions (see ProbedAudioTrack in src/lib/ffprobe.ts):
+  // the container's default-track flag, and whether this is an audio
+  // description / commentary track. Rows probed before these existed are
+  // false/false until the next forced scan.
+  isDefault     Boolean @default(false)
+  isDescriptive Boolean @default(false)
 
   @@index([versionId])
 }
