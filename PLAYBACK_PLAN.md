@@ -225,6 +225,21 @@ position, direct play by byte range). D is the manual pass in
   Broadcast" without a scrubber while a prepare is in flight — that label
   is the browser's, and only a finished playlist (or a switch to hls.js
   over MSE on Safari desktop, not done) changes it.
+- **Stopping work nobody wants.** Every playlist/segment request re-arms a
+  ten-minute idle timer on the job (a paused player or a VPN blip must not
+  restart a two-hour transcode from byte 0). A deliberate close is a
+  stronger signal: VideoPlayer sends `POST /leave?variant=` (keepalive) on
+  unmount and for the outgoing variant on a quality switch, and the server
+  drops that job's window to 30s (`noteViewerLeft`). Anyone else watching
+  re-arms the full window with their next segment request. Seen before
+  this existed: two abandoned prepares running for ten minutes each on
+  5 Sep 2026.
+- **Progress needs a real duration.** Native HLS reports duration =
+  Infinity while a playlist is in flight, and reports were skipped
+  without a finite duration -- so no film played on Safari/iOS during
+  its prepare ever got a WatchProgress row (production had exactly one,
+  for a title played after its cache completed). `/status` now returns
+  the probed `durationSecs` and the player falls back to it.
 - **`-hls_time` and keyframes**: for stream-copied video, segment
   boundaries land on source keyframes, so segments can be longer than 6s
   on sources with sparse keyframes (some Blu-ray encodes use 2–5s GOPs,

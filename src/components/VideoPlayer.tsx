@@ -122,6 +122,23 @@ async function waitForPlaylist(url: string, cancelled: () => boolean): Promise<s
   return null;
 }
 
+// Tell the server this viewer has left a prepared variant so its ffmpeg job
+// isn't kept for the full idle window (POST /leave, see noteViewerLeft in
+// video-cache.ts). Fire-and-forget with keepalive so it survives the modal
+// unmounting or the tab navigating away. Only meaningful for HLS: a
+// direct-play /stream has no job to stop.
+function sendLeave(basePath: string, id: number, variant: Variant): void {
+  fetch(`${basePath}/${id}/leave?variant=${variant}`, { method: "POST", keepalive: true }).catch(() => {});
+}
+
+// The duration a progress report should carry: the element's when it knows
+// one, else the probed runtime from /status (native HLS reports Infinity
+// while the playlist is still being written).
+function progressDuration(v: HTMLVideoElement, known: number | null): number | null {
+  if (Number.isFinite(v.duration) && v.duration > 0) return v.duration;
+  return known;
+}
+
 function hasNativePlayerBridge(): boolean {
   return typeof window !== "undefined" && Boolean(window.webkit?.messageHandlers?.mediaVaultPlayer);
 }
@@ -206,6 +223,14 @@ export default function VideoPlayer({
   // so), false while preparing, when hls.js reports the written length as a
   // finite but growing duration.
   const durationIsFinalRef = useRef(false);
+  // The probed runtime from /status. Progress reports need a real duration
+  // and the element's is Infinity on a native in-progress playlist, so
+  // without this nothing was ever saved for a film still being prepared.
+  const knownDurationRef = useRef<number | null>(null);
+  // What the unmount cleanup needs to send the leave beacon for (state
+  // isn't readable from a []-deps cleanup).
+  const latestRef = useRef<{ variant: Variant; tier: Tier | null }>({ variant, tier: null });
+  latestRef.current = { variant, tier };
 
   useEffect(() => {
     let cancelled = false;
@@ -245,6 +270,8 @@ export default function VideoPlayer({
       const resolvedTier: Tier = status.state === "direct" ? "direct" : "prepare";
       setTier(resolvedTier);
       durationIsFinalRef.current = status.state === "direct" || status.state === "ready";
+      knownDurationRef.current =
+        typeof status.durationSecs === "number" && status.durationSecs > 0 ? status.durationSecs : null;
 
       if (progressRes?.ok) {
         const progress = await progressRes.json().catch(() => null);
@@ -295,14 +322,22 @@ export default function VideoPlayer({
     // the viewer is -- reporting it would overwrite the real resume point.
     if (seekOnLoadRef.current !== null) return;
     const v = videoRef.current;
-    if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return;
+    if (!v) return;
+    const duration = progressDuration(v, knownDurationRef.current);
+    if (duration === null) return;
     lastReportedPosRef.current = v.currentTime;
-    reportProgress(basePath, versionId, v.currentTime, v.duration, false);
+    reportProgress(basePath, versionId, v.currentTime, duration, false);
   }, [basePath, versionId, trackProgress]);
 
   useEffect(() => {
-    return () => flushProgress();
-  }, [flushProgress]);
+    return () => {
+      flushProgress();
+      // Whatever way this player goes away (Close, route change), let the
+      // server hurry the job along if nobody else is watching.
+      const { variant: v, tier: t } = latestRef.current;
+      if (t === "prepare" || v === "remote") sendLeave(basePath, versionId, v);
+    };
+  }, [flushProgress, basePath, versionId]);
 
   // Attach the source to the <video> whenever what we should be playing
   // changes. Direct-play: plain src. HLS: native where the browser can, else
@@ -420,6 +455,9 @@ export default function VideoPlayer({
     // duration is not final until a fresh status says so.
     durationIsFinalRef.current = false;
     stopHoldPoll();
+    // The outgoing variant's job would otherwise run on for the full idle
+    // window with nobody watching it.
+    if (tier === "prepare" || variant === "remote") sendLeave(basePath, versionId, variant);
     rememberQuality(next);
     setVariant(next);
   }
@@ -569,9 +607,10 @@ export default function VideoPlayer({
                   if (trackProgress && !hasReportedStartRef.current && seekOnLoadRef.current === null) {
                     hasReportedStartRef.current = true;
                     const v = videoRef.current;
-                    if (v && Number.isFinite(v.duration) && v.duration > 0) {
+                    const duration = v ? progressDuration(v, knownDurationRef.current) : null;
+                    if (v && duration !== null) {
                       lastReportedPosRef.current = v.currentTime;
-                      reportProgress(basePath, versionId, v.currentTime, v.duration, true);
+                      reportProgress(basePath, versionId, v.currentTime, duration, true);
                     }
                   }
                 }}
@@ -579,7 +618,8 @@ export default function VideoPlayer({
                 onTimeUpdate={(e) => {
                   if (!trackProgress || seekOnLoadRef.current !== null) return;
                   const v = e.currentTarget;
-                  if (!Number.isFinite(v.duration) || v.duration <= 0) return;
+                  const duration = progressDuration(v, knownDurationRef.current);
+                  if (duration === null) return;
                   // Throttle: only report once real playback time has
                   // advanced past the interval, not on every `timeupdate`
                   // tick (which fires several times a second). A backward
@@ -587,7 +627,7 @@ export default function VideoPlayer({
                   // which is fine — it's still at most one extra request.
                   if (Math.abs(v.currentTime - lastReportedPosRef.current) >= WATCH_PROGRESS_REPORT_INTERVAL_SECS) {
                     lastReportedPosRef.current = v.currentTime;
-                    reportProgress(basePath, versionId, v.currentTime, v.duration, false);
+                    reportProgress(basePath, versionId, v.currentTime, duration, false);
                   }
                 }}
                 onPause={flushProgress}
