@@ -7,7 +7,7 @@ import LibraryBrowser from "@/components/LibraryBrowser";
 import { PasskeyNudge } from "@/components/auth/PasskeyNudge";
 import { auth } from "@/lib/auth";
 import { PASSKEY_NUDGE_COOKIE } from "@/lib/flow-cookies";
-import { getContinueWatchingFilms, getLibraryFilms } from "@/lib/queries";
+import { getContinueWatchingFilms, getFavouriteFilms, getLibraryFilms } from "@/lib/queries";
 
 export default async function LibraryPage() {
   // proxy.ts already guarantees a signed-in session got this far; still
@@ -20,9 +20,10 @@ export default async function LibraryPage() {
   // whether this device can make a passkey and whether it's been dismissed.
   const nudgePasskey = (await cookies()).has(PASSKEY_NUDGE_COOKIE);
 
-  const [{ films, filmCount, discCount }, continueWatching] = await Promise.all([
+  const [{ films, filmCount, discCount }, continueWatching, favourites] = await Promise.all([
     getLibraryFilms(),
     userId ? getContinueWatchingFilms(userId) : Promise.resolve([]),
+    userId ? getFavouriteFilms(userId) : Promise.resolve([]),
   ]);
 
   return (
@@ -38,7 +39,7 @@ export default async function LibraryPage() {
         )}
         {filmCount === 0 && <div className="pb-6" />}
       </div>
-      <LibraryBrowser films={films} continueWatching={continueWatching} />
+      <LibraryBrowser films={films} continueWatching={continueWatching} favourites={favourites} />
     </div>
   );
 }

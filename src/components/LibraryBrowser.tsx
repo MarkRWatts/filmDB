@@ -150,6 +150,7 @@ const COLLECTIONS_SECTION = "Collections";
 export default function LibraryBrowser({
   films,
   continueWatching = [],
+  favourites = [],
 }: {
   films: LibraryFilm[];
   /** Signed-in user's in-progress films (see getContinueWatchingFilms) —
@@ -157,6 +158,9 @@ export default function LibraryBrowser({
    *  Empty for a signed-out request or a user with nothing in progress;
    *  FilmShelf itself renders nothing when its list is empty. */
   continueWatching?: LibraryFilm[];
+  /** Signed-in user's hearted films (see getFavouriteFilms), shelved
+   *  after "Recently added". Empty list = no shelf. */
+  favourites?: LibraryFilm[];
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
@@ -382,6 +386,7 @@ export default function LibraryBrowser({
       <FilmShelf title="Continue watching" films={continueWatching} />
       <FilmShelf title="New releases" films={newReleases} />
       <FilmShelf title="Recently added" films={recentlyAdded} />
+      <FilmShelf title="Favourites" films={favourites} />
 
       {filtered.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 py-24 text-center">

@@ -251,6 +251,12 @@ async function main(): Promise<void> {
     check("browser can decode H.264/AAC (else nothing below is meaningful)", codecs);
 
     await page.goto(`/film/${remuxFilmId}`);
+    // E2E_SCREENSHOT=<path.png>: save the film page as rendered (the action
+    // row above the overview, version cards) for a visual check.
+    if (process.env.E2E_SCREENSHOT) {
+      await page.setViewportSize({ width: 1200, height: 900 });
+      await page.screenshot({ path: process.env.E2E_SCREENSHOT, fullPage: true });
+    }
     await page.getByRole("button", { name: "Play" }).first().click();
     await page.locator("video").waitFor({ timeout: 20_000 });
     const tA = await waitForTimeAbove(page, 2, 40_000);
