@@ -23,6 +23,11 @@ export default async function FilmPage({
   // Only build deep links when the server is actually reachable — no error
   // state in the UI, versions without a match simply get no button.
   const jellyfinServer = await getJellyfinServerInfo();
+  // The in-app player is parked while playback moves to Jellyfin (see
+  // PLAYBACK_PLAN.md, "Status"): shown only when IN_APP_PLAYBACK=1, which
+  // scripts/e2e-playback.ts sets for its own server so the pipeline stays
+  // tested.
+  const showInAppPlay = process.env.IN_APP_PLAYBACK === "1";
 
   return (
     <div className="flex flex-1 flex-col">
@@ -130,6 +135,7 @@ export default async function FilmPage({
                   key={v.id}
                   version={v}
                   filmTitle={film.title}
+                  showPlay={showInAppPlay}
                   jellyfinHref={
                     v.jellyfinId && jellyfinServer ? jellyfinPlayUrl(v.jellyfinId, jellyfinServer.serverId) : null
                   }

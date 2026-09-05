@@ -204,6 +204,18 @@ preparing, seeks backwards mid-encode, switches to Remote keeping the
 position, direct play by byte range). D is the manual pass in
 `docs/TEST_PLAN_2026-09.md`.
 
+## Status (5 Sep 2026)
+
+The in-app Play button is hidden unless `IN_APP_PLAYBACK=1`. A day of
+production testing showed the streaming-while-preparing design working
+but living at its limits: a 4-core VM reading Blu-ray rips over a CIFS
+share that tops out near 90 Mbit/s, three player implementations with
+different ideas about an event playlist, and no way to seek past what
+ffmpeg has written. Playback is moving to Jellyfin (already deployed,
+already SSO-linked, and built for exactly this); MediaVault stays the
+catalogue. The pipeline and its e2e remain in the tree, exercised by
+`scripts/e2e-playback.ts`, until that move is done.
+
 ## What to watch for
 
 - **Event playlists in hls.js** need `lowLatencyMode: false` and a sane
